@@ -1,0 +1,37 @@
+{
+  "name": "每日复盘与计划",
+  "id": "daily-review",
+  "manifestVersion": 1,
+  "version": "2.3.0",
+  "minSupVersion": "19.1.0",
+  "description": "Linear 风格每日复盘：动态环形进度、时间线与全天任务、滑入详情抽屉、月度日历和 30 天完成率折线图，支持补勾计入完成与 Trae 自动排程。",
+  "author": "Aurora-horizon",
+  "hooks": [
+    "taskCreated",
+    "taskUpdate",
+    "taskComplete",
+    "taskDelete",
+    "anyTaskUpdate",
+    "finishDay"
+  ],
+  "permissions": [
+    "getAppState",
+    "getTasks",
+    "getArchivedTasks",
+    "getAllProjects",
+    "getAllTags",
+    "addTask",
+    "updateTask",
+    "persistDataSynced",
+    "loadSyncedData",
+    "selectTask",
+    "showIndexHtmlAsView",
+    "showSnack",
+    "downloadFile"
+  ],
+  "iFrame": true,
+  "sidePanel": false,
+  "type": "standard",
+  "assets": [],
+  "icon": "icon.svg"
+}

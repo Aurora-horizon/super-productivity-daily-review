@@ -1,0 +1,12 @@
+# Build and runtime artifacts
+node_modules/
+*.log
+.test-server.pid
+
+# Local plugin data (contains personal task details)
+archives/
+daily-review-data*.json
+
+# Release packages are published via GitHub Releases
+*.zip
+dist/
