@@ -60,6 +60,8 @@
     if (!data.reasons || typeof data.reasons !== 'object') data.reasons = {};
     if (!data.imports || typeof data.imports !== 'object') data.imports = {};
     if (!data.closures || typeof data.closures !== 'object') data.closures = {};
+    if (!data.skips || typeof data.skips !== 'object') data.skips = {};
+    if (!Array.isArray(data.scheduleHistory)) data.scheduleHistory = [];
     return data;
   }
 
@@ -112,6 +114,11 @@
     Object.keys(data.closures).forEach(function (day) {
       if (day < cutoffStr) delete data.closures[day];
     });
+    Object.keys(data.skips).forEach(function (key) {
+      var day = key.split('::')[1];
+      if (day && day < cutoffStr) delete data.skips[key];
+    });
+    data.scheduleHistory = data.scheduleHistory.slice(0, 100);
   }
 
   async function takeSnapshot() {

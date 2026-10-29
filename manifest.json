@@ -2,9 +2,9 @@
   "name": "每日复盘与计划",
   "id": "daily-review",
   "manifestVersion": 1,
-  "version": "2.5.1",
+  "version": "2.6.0",
   "minSupVersion": "19.1.0",
-  "description": "Linear 风格每日复盘：动态环形进度、时间线与全天任务、滑入详情抽屉、月度日历和 30 天完成率折线图；支持插件内双向勾选、逾期任务队列、顺延/移到今天、每日收尾日结和完成分类，并与 Super Productivity 实时同步。",
+  "description": "Linear 风格每日复盘：支持插件内双向勾选、逾期任务按天分流、改期撤销、每日/重复任务保护、日结收尾和完成分类，并与 Super Productivity 实时同步。",
   "author": "Aurora-horizon",
   "hooks": [
     "taskCreated",
