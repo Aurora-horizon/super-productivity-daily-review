@@ -62,6 +62,7 @@
     if (!data.closures || typeof data.closures !== 'object') data.closures = {};
     if (!data.skips || typeof data.skips !== 'object') data.skips = {};
     if (!Array.isArray(data.scheduleHistory)) data.scheduleHistory = [];
+    if (!data.taskTypes || typeof data.taskTypes !== 'object') data.taskTypes = {};
     return data;
   }
 
