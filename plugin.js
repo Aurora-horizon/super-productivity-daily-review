@@ -59,6 +59,7 @@
     if (!data.completions || typeof data.completions !== 'object') data.completions = {};
     if (!data.reasons || typeof data.reasons !== 'object') data.reasons = {};
     if (!data.imports || typeof data.imports !== 'object') data.imports = {};
+    if (!data.closures || typeof data.closures !== 'object') data.closures = {};
     return data;
   }
 
@@ -107,6 +108,9 @@
     Object.keys(data.reasons).forEach(function (key) {
       var day = key.split('::')[1];
       if (day && day < cutoffStr) delete data.reasons[key];
+    });
+    Object.keys(data.closures).forEach(function (day) {
+      if (day < cutoffStr) delete data.closures[day];
     });
   }
 
@@ -185,7 +189,8 @@
         var parts = key.split('::');
         var id = parts[0], day = parts[1];
         var stillPlanned = day && data.days[day] && data.days[day].tasks && data.days[day].tasks[id];
-        if (!seen[id] || (day >= today && !stillPlanned)) delete data.reasons[key];
+        var isClosedDay = !!(day && data.closures[day]);
+        if (!seen[id] || (day >= today && !stillPlanned && !isClosedDay)) delete data.reasons[key];
       });
 
       prune(data, today);
