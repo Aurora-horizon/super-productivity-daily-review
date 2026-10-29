@@ -2,9 +2,9 @@
   "name": "每日复盘与计划",
   "id": "daily-review",
   "manifestVersion": 1,
-  "version": "2.8.0",
+  "version": "2.9.0",
   "minSupVersion": "19.1.0",
-  "description": "Linear 风格每日复盘：支持任务系列、未来 7 天自动补齐、每日/一次性/短期/长期类型、逾期分流、重复任务保护、改期撤销和日结，并与 Super Productivity 实时同步。",
+  "description": "Linear 风格每日复盘：支持任务系列、未来 7 天自动补齐、一次性/每日/短期/长期分类、逾期一次性任务分流、无法完成原因记录、改期撤销和日结。",
   "author": "Aurora-horizon",
   "hooks": [
     "taskCreated",

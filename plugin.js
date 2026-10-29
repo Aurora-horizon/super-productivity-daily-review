@@ -63,6 +63,7 @@
     if (!data.skips || typeof data.skips !== 'object') data.skips = {};
     if (!Array.isArray(data.scheduleHistory)) data.scheduleHistory = [];
     if (!data.taskTypes || typeof data.taskTypes !== 'object') data.taskTypes = {};
+    if (!data.dropped || typeof data.dropped !== 'object') data.dropped = {};
     return data;
   }
 
@@ -118,6 +119,10 @@
     Object.keys(data.skips).forEach(function (key) {
       var day = key.split('::')[1];
       if (day && day < cutoffStr) delete data.skips[key];
+    });
+    Object.keys(data.dropped).forEach(function (key) {
+      var day = key.split('::')[1];
+      if (day && day < cutoffStr) delete data.dropped[key];
     });
     data.scheduleHistory = data.scheduleHistory.slice(0, 100);
   }
