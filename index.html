@@ -71,6 +71,14 @@
     .task-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
     .task-action { border: 0; background: transparent; color: var(--muted); padding: 4px 6px; border-radius: 6px; font-size: 11px; }
     .task-action:hover { background: var(--surface-2); color: var(--text); }
+    .task-check { appearance:none; width:19px; height:19px; flex:0 0 auto; margin:1px 0 0; padding:0; border:1.5px solid color-mix(in srgb,var(--muted) 58%,transparent); border-radius:6px; background:transparent; color:transparent; display:grid; place-items:center; font-size:13px; font-weight:800; line-height:1; transition:background .16s ease,border-color .16s ease,color .16s ease,transform .16s ease; }
+    .task-check:hover { border-color:var(--good); background:rgba(34,197,94,.1); transform:scale(1.05); }
+    .task-check.done { border-color:var(--good); background:var(--good); color:#fff; }
+    .task-check.busy { opacity:.5; cursor:wait; transform:none; }
+    .task-check:disabled { cursor:not-allowed; opacity:.42; transform:none; }
+    .task-card-head { display:flex; align-items:flex-start; gap:9px; }
+    .task-card-head .task-card-title { flex:1; min-width:0; }
+    .extra-copy { min-width:0; flex:1; }
     .reason-box { margin: 9px 0 0 18px; padding: 9px 10px; border-radius: 9px; background: var(--surface-2); display: grid; grid-template-columns: minmax(130px,.55fr) minmax(160px,1fr); gap: 8px; }
     .reason-box.missing { border-left: 3px solid var(--warn); }
     .reason-box select, .reason-box input, .input, .textarea { width: 100%; background: transparent; border: 1px solid var(--divider); border-radius: 7px; padding: 6px 8px; }
@@ -280,8 +288,8 @@
     .drawer-section { margin-top:16px; }
     .drawer-section h4 { margin:0 0 7px; font-size:11px; color:var(--muted); font-weight:650; }
     .drawer-notes { padding:11px 12px; border-radius:9px; background:var(--surface); border:1px solid var(--divider); white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
-    .drawer-actions { display:flex; gap:8px; margin-top:20px; }
-    .drawer-actions .btn { flex:1; }
+    .drawer-actions { display:flex; gap:8px; margin-top:20px; flex-wrap:wrap; }
+    .drawer-actions .btn { flex:1 1 110px; }
     .drawer-reason-grid { display:grid; grid-template-columns:1fr; gap:7px; }
     .drawer-reason-grid select, .drawer-reason-grid input { width:100%; border:1px solid var(--divider); background:var(--surface); color:var(--text); padding:8px 9px; border-radius:8px; }
     .drawer-tag { padding:3px 8px; border-radius:99px; background:var(--surface-2); color:var(--muted); font-size:10.5px; margin:0 5px 5px 0; display:inline-block; }
@@ -349,7 +357,8 @@
       var state = {
         tab: 'day', day: todayStr(), calendarAnchor: todayStr(), data: normalize(null),
         tasks: [], archived: [], taskMap: new Map(), projectMap: new Map(), tagMap: new Map(),
-        loaded: false, importing: false, dayFilter: 'all', previewItems: [], previewWarnings: []
+        loaded: false, importing: false, dayFilter: 'all', previewItems: [], previewWarnings: [],
+        archivedIds: new Set(), busyTaskIds: new Set()
       };
       var saveChain = Promise.resolve();
       var toastTimer = null;
@@ -463,6 +472,7 @@
           dayOffsetMs = parseDayOffset(result[5] && result[5].globalConfig && result[5].globalConfig.misc);
           state.tasks = result[0] || [];
           state.archived = result[1] || [];
+          state.archivedIds = new Set(state.archived.map(function (t) { return t && t.id; }).filter(Boolean));
           state.projectMap = new Map((result[2] || []).map(function (p) { return [p.id, p]; }));
           state.tagMap = new Map((result[3] || []).map(function (t) { return [t.id, t]; }));
           state.taskMap = new Map();
@@ -476,7 +486,7 @@
           }
           reconcileSnapshots();
           state.loaded = true;
-          document.getElementById('subtitle').textContent = '共 ' + state.taskMap.size + ' 个任务 · 实时同步已启用';
+          document.getElementById('subtitle').textContent = '共 ' + state.taskMap.size + ' 个任务 · 实时同步已启用 · 可在此勾选完成';
           render();
           setupRealtime();
         } catch (e) {
@@ -493,21 +503,46 @@
       function dayMetrics(day) { var pids=plannedIds(day),cids=completedIds(day),onTime=0,caughtUp=0,open=0,pending=0; pids.forEach(function(id){var st=statusFor(getRecord(id,day),day);if(st==='done')onTime++;else if(st==='late')caughtUp++;else if(st==='open')open++;else if(st==='pending')pending++;}); var extra=cids.filter(function(id){return pids.indexOf(id)===-1;}).length; var plannedCompleted=onTime+caughtUp; return {planned:pids.length,done:plannedCompleted,onTime:onTime,caughtUp:caughtUp,late:caughtUp,completed:plannedCompleted,doneOnDay:cids.length,extra:extra,open:open,pending:pending,unfinished:open,rate:pct(plannedCompleted,pids.length)}; }
       function projectName(id) { var p=state.projectMap.get(id); return p?p.title:''; }
       function openTask(taskId) { if(taskId&&typeof PluginAPI.selectTask==='function')PluginAPI.selectTask(taskId).catch(function(e){toast('打开任务失败：'+e.message,true);}); }
+      function recordIsDone(rec) { return !!(rec && (rec.isDone || typeof rec.doneOn==='number')); }
+      function taskToggleHtml(id, done, extraClass) {
+        var archived=state.archivedIds.has(id), busy=state.busyTaskIds.has(id), disabled=archived||busy;
+        var label=archived?'已归档任务请在 Super Productivity 中操作':busy?'正在同步…':done?'取消完成':'标记完成';
+        return '<button type="button" class="task-check'+(done?' done':'')+(busy?' busy':'')+(extraClass?' '+extraClass:'')+'" data-toggle-done="'+escapeHtml(id)+'" data-next-done="'+(done?'0':'1')+'" aria-pressed="'+(done?'true':'false')+'" aria-label="'+escapeHtml(label)+'" title="'+escapeHtml(label)+'"'+(disabled?' disabled':'')+'>'+(done?'✓':'')+'</button>';
+      }
+      function markToggleBusy(id) { document.querySelectorAll('[data-toggle-done]').forEach(function(el){if(el.getAttribute('data-toggle-done')===id){el.classList.add('busy');el.disabled=true;}}); }
+      async function toggleTaskDone(id, nextDone) {
+        if(!id||state.busyTaskIds.has(id))return;
+        if(state.archivedIds.has(id)){toast('该任务已归档，请在 Super Productivity 中切换完成状态',true);return;}
+        if(typeof PluginAPI==='undefined'||typeof PluginAPI.updateTask!=='function'){toast('当前环境不支持更新任务',true);return;}
+        state.busyTaskIds.add(id);markToggleBusy(id);
+        try {
+          await PluginAPI.updateTask(id,{isDone:!!nextDone});
+          state.busyTaskIds.delete(id);
+          await loadAll(true);
+          toast(nextDone?'已标记完成，并同步到 Super Productivity':'已取消完成，并同步到 Super Productivity');
+        } catch(e) {
+          state.busyTaskIds.delete(id);
+          await loadAll(true);
+          toast('同步完成状态失败：'+(e&&e.message?e.message:e),true);
+        }
+      }
+      function bindTaskToggles() { document.querySelectorAll('[data-toggle-done]').forEach(function(el){el.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();toggleTaskDone(el.getAttribute('data-toggle-done'),el.getAttribute('data-next-done')==='1');});}); }
       function projectColor(id) { var p=state.projectMap.get(id); return p&&p.theme&&p.theme.primary?p.theme.primary:'var(--accent)'; }
       function projectChip(id) { var name=projectName(id); if(!name)return ''; return '<span class="project-chip" style="--project-color:'+escapeHtml(projectColor(id))+'"><i></i>'+escapeHtml(name)+'</span>'; }
       function openTaskDrawer(id,day) {
         var rec=getRecord(id,day); if(!rec)return;
         var status=statusFor(rec,day), color=projectColor(rec.projectId), notes=stripMarker(rec.notes), tags=(rec.tagIds||[]).map(function(tid){var t=state.tagMap.get(tid);return t?'<span class="drawer-tag">'+escapeHtml(t.title)+'</span>':'';}).join('');
-        var reason=state.data.reasons[reasonKey(id,day)]||{}, showReason=status==='open'||status==='pending';
+        var reason=state.data.reasons[reasonKey(id,day)]||{}, showReason=status==='open'||status==='pending', isArchived=state.archivedIds.has(id);
         var reasonHtml=showReason?'<div class="drawer-section"><h4>未完成原因</h4><div class="drawer-reason-grid"><select id="drawer-reason"><option value="">选择原因…</option>'+REASONS.map(function(r){return '<option value="'+r[0]+'"'+(reason.code===r[0]?' selected':'')+'>'+r[1]+'</option>';}).join('')+'</select><input id="drawer-reason-note" value="'+escapeHtml(reason.note||'')+'" placeholder="补充说明（可选）" /></div></div>':'';
         document.getElementById('drawer-title').textContent=rec.title;
         document.getElementById('drawer-body').innerHTML='<div class="drawer-status"><span class="pill '+statusClass(status)+'">'+statusLabel(status)+'</span>'+projectChip(rec.projectId)+'<span class="pill">'+escapeHtml(day)+'</span></div>'+
           '<div class="detail-grid"><div class="detail-cell"><span>预计时长</span><b>'+escapeHtml(formatMinutes(rec.timeEstimate)||'未设置')+'</b></div><div class="detail-cell"><span>已记录时间</span><b>'+escapeHtml(formatMinutes(rec.timeSpent)||'0 分钟')+'</b></div><div class="detail-cell"><span>计划日期</span><b>'+escapeHtml(plannedDay(rec)||day)+'</b></div><div class="detail-cell"><span>完成日期</span><b>'+escapeHtml(doneDay(rec)||'尚未完成')+'</b></div></div>'+
           reasonHtml+'<div class="drawer-section"><h4>备注</h4><div class="drawer-notes">'+escapeHtml(notes||'没有备注')+'</div></div>'+
           (tags?'<div class="drawer-section"><h4>标签</h4><div>'+tags+'</div></div>':'')+
-          '<div class="drawer-actions"><button class="btn primary" type="button" id="drawer-open-task">在软件中打开</button><button class="btn" type="button" id="drawer-close-bottom">关闭</button></div>';
+          '<div class="drawer-actions"><button class="btn primary" type="button" id="drawer-toggle-done"'+(isArchived?' disabled':'')+'>'+(recordIsDone(rec)?'✓ 取消完成':'✓ 标记完成')+'</button><button class="btn" type="button" id="drawer-open-task">在软件中打开</button><button class="btn" type="button" id="drawer-close-bottom">关闭</button></div>';
         var drawer=document.getElementById('task-drawer'),backdrop=document.getElementById('drawer-backdrop');
         drawer.classList.add('open');backdrop.classList.add('open');drawer.setAttribute('aria-hidden','false');
+        document.getElementById('drawer-toggle-done').addEventListener('click',function(){closeTaskDrawer();toggleTaskDone(id,!recordIsDone(rec));});
         document.getElementById('drawer-open-task').addEventListener('click',function(){openTask(id);});
         document.getElementById('drawer-close-bottom').addEventListener('click',closeTaskDrawer);
         if(showReason){var reasonSelect=document.getElementById('drawer-reason'),reasonNote=document.getElementById('drawer-reason-note');reasonSelect.addEventListener('change',function(){var item=state.data.reasons[reasonKey(id,day)]||{note:''};item.code=reasonSelect.value;item.updatedAt=Date.now();state.data.reasons[reasonKey(id,day)]=item;persist();toast('原因已保存');render();});var noteTimer=null;reasonNote.addEventListener('input',function(){var item=state.data.reasons[reasonKey(id,day)]||{code:''};item.note=reasonNote.value;item.updatedAt=Date.now();state.data.reasons[reasonKey(id,day)]=item;if(noteTimer)clearTimeout(noteTimer);noteTimer=setTimeout(function(){persist();toast('说明已保存');render();},650);});}
@@ -570,7 +605,7 @@
       function allDayCard(x, day, index) {
         var rec=x.rec, project=projectChip(rec.projectId), estimate=formatMinutes(rec.timeEstimate);
         return '<article class="task-card '+x.status+'" data-task-card="'+escapeHtml(x.id)+'" style="--project-color:'+escapeHtml(projectColor(rec.projectId))+';animation-delay:'+(Math.min(index,12)*24)+'ms">'+
-          '<div class="task-card-title '+(x.status==='done'?'done':'')+'">'+escapeHtml(rec.title)+'</div>'+
+          '<div class="task-card-head">'+taskToggleHtml(x.id,recordIsDone(rec))+'<div class="task-card-title '+(x.status==='done'?'done':'')+'">'+escapeHtml(rec.title)+'</div></div>'+
           '<div class="task-card-meta"><span class="pill '+statusClass(x.status)+'">'+statusLabel(x.status)+'</span>'+project+(estimate?'<span>预计 '+escapeHtml(estimate)+'</span>':'')+reasonPrompt(x.id,day,x.status)+'</div></article>';
       }
       function renderDay() {
@@ -583,12 +618,12 @@
         var timeline=timed.map(function(x,idx){
           var project=projectChip(x.rec.projectId),estimate=formatMinutes(x.rec.timeEstimate);
           return '<div class="timeline-item" style="animation-delay:'+(Math.min(idx,12)*28)+'ms"><div class="timeline-time">'+escapeHtml(x.time)+'</div><div class="timeline-rail"><span class="timeline-dot '+x.status+'"></span></div>'+
-            '<div class="timeline-card '+x.status+'" data-task-card="'+escapeHtml(x.id)+'" style="--project-color:'+escapeHtml(projectColor(x.rec.projectId))+'"><div class="task-main"><div class="task-copy"><div class="timeline-title '+(x.status==='done'?'done':'')+'">'+escapeHtml(x.rec.title)+'</div><div class="task-meta"><span class="pill '+statusClass(x.status)+'">'+statusLabel(x.status)+'</span>'+project+(estimate?'<span>预计 '+escapeHtml(estimate)+'</span>':'')+reasonPrompt(x.id,day,x.status)+'</div></div><div class="task-actions"><button class="task-action" data-open-task="'+escapeHtml(x.id)+'" type="button">打开</button></div></div></div></div>';
+            '<div class="timeline-card '+x.status+'" data-task-card="'+escapeHtml(x.id)+'" style="--project-color:'+escapeHtml(projectColor(x.rec.projectId))+'"><div class="task-main">'+taskToggleHtml(x.id,recordIsDone(x.rec))+'<div class="task-copy"><div class="timeline-title '+(x.status==='done'?'done':'')+'">'+escapeHtml(x.rec.title)+'</div><div class="task-meta"><span class="pill '+statusClass(x.status)+'">'+statusLabel(x.status)+'</span>'+project+(estimate?'<span>预计 '+escapeHtml(estimate)+'</span>':'')+reasonPrompt(x.id,day,x.status)+'</div></div><div class="task-actions"><button class="task-action" data-open-task="'+escapeHtml(x.id)+'" type="button">打开</button></div></div></div></div>';
         }).join('');
         var groups=[{key:'open',label:'需要处理',items:allDay.filter(function(x){return x.status==='open'||x.status==='pending';})},{key:'late',label:'补勾完成',items:allDay.filter(function(x){return x.status==='late';})},{key:'done',label:'按时完成',items:allDay.filter(function(x){return x.status==='done';})}];
         var allDayHtml=groups.filter(function(g){return g.items.length;}).map(function(g){return '<div class="group-heading">'+g.label+'<span>'+g.items.length+'</span></div><div class="all-day-grid">'+g.items.map(function(x,i){return allDayCard(x,day,i);}).join('')+'</div>';}).join('');
         var extraIds=cids.filter(function(id){return pids.indexOf(id)===-1;});
-        var extraRows=extraIds.map(function(id){var rec=getRecord(id,day)||(state.data.completions[day]&&state.data.completions[day][id]);if(!rec)return '';return '<div class="extra-item" data-task-card="'+escapeHtml(id)+'"><span class="status-dot done"></span><div><b>'+escapeHtml(rec.title)+'</b><span>'+(projectName(rec.projectId)?escapeHtml(projectName(rec.projectId)):'未列入计划')+'</span></div></div>';}).join('');
+        var extraRows=extraIds.map(function(id){var rec=getRecord(id,day)||(state.data.completions[day]&&state.data.completions[day][id]);if(!rec)return '';return '<div class="extra-item" data-task-card="'+escapeHtml(id)+'">'+taskToggleHtml(id,recordIsDone(rec))+'<div class="extra-copy"><b>'+escapeHtml(rec.title)+'</b><span>'+(projectName(rec.projectId)?escapeHtml(projectName(rec.projectId)):'未列入计划')+'</span></div></div>';}).join('');
         var reviewTotal=allRows.filter(function(x){return x.status==='open'||x.status==='pending';}).length;
         var reviewDone=allRows.filter(function(x){if(x.status!=='open'&&x.status!=='pending')return false;return !!(state.data.reasons[reasonKey(x.id,day)]||{}).code;}).length;
         var ringColor=day>today?'var(--blue)':m.rate>=80?'var(--good)':m.rate>=50?'var(--accent)':'var(--bad)';
@@ -603,7 +638,7 @@
         document.getElementById('next-day').addEventListener('click',function(){state.day=addDays(day,1);render();});
         document.getElementById('today-btn').addEventListener('click',function(){state.day=todayStr();render();});
         document.querySelectorAll('[data-day-filter]').forEach(function(el){el.addEventListener('click',function(){state.dayFilter=el.getAttribute('data-day-filter');renderDay();});});
-        bindTaskActions();bindTaskCards(day);animateRing();
+        bindTaskActions();bindTaskToggles();bindTaskCards(day);animateRing();
       }
       function renderCalendar() {
         var anchorDate = parseDay(state.calendarAnchor);
