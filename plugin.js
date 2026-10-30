@@ -1,8 +1,13 @@
-﻿/* 每日复盘与计划 —— 后台快照入口 */
+/* 每日复盘与计划 —— 后台快照入口 */
 (function () {
   'use strict';
 
   var KEY = 'daily-review-data-v1';
+  var STORAGE_LIMIT_BYTES = 262144;
+  var STORAGE_TARGET_BYTES = 220 * 1024;
+  var DETAIL_RETENTION_DAYS = 30;
+  var SUMMARY_RETENTION_DAYS = 730;
+  var ARCHIVE_SCHEMA = 'super-productivity.daily-review.half-month';
   var snapshotTimer = null;
   var snapshotRunning = false;
   var snapshotAgain = false;
@@ -20,6 +25,45 @@
 
   function logicalDateStr(value) {
     return dateStr(new Date(Number(value) - dayOffsetMs));
+  }
+
+  function todayStr() {
+    return dateStr(new Date(Date.now() - dayOffsetMs));
+  }
+
+  function parseDay(s) {
+    return new Date(s + 'T00:00:00');
+  }
+
+  function addDays(s, n) {
+    var d = parseDay(s);
+    d.setDate(d.getDate() + n);
+    return dateStr(d);
+  }
+
+  function pct(n, d) {
+    return d ? Math.round((n / d) * 100) : 0;
+  }
+
+  function reasonKey(id, day) {
+    return id + '::' + day;
+  }
+
+  function byteSize(text) {
+    try {
+      return new Blob([text]).size;
+    } catch (e) {
+      return unescape(encodeURIComponent(text)).length;
+    }
+  }
+
+  function hashString(s) {
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return ('00000000' + (h >>> 0).toString(16)).slice(-8);
   }
 
   function parseDayOffset(misc) {
@@ -54,7 +98,7 @@
 
   function normalize(raw) {
     var data = raw && typeof raw === 'object' ? raw : {};
-    if (!data.version) data.version = 1;
+    if (!data.version) data.version = 2;
     if (!data.days || typeof data.days !== 'object') data.days = {};
     if (!data.completions || typeof data.completions !== 'object') data.completions = {};
     if (!data.reasons || typeof data.reasons !== 'object') data.reasons = {};
@@ -64,6 +108,10 @@
     if (!Array.isArray(data.scheduleHistory)) data.scheduleHistory = [];
     if (!data.taskTypes || typeof data.taskTypes !== 'object') data.taskTypes = {};
     if (!data.dropped || typeof data.dropped !== 'object') data.dropped = {};
+    if (!data.daySummaries || typeof data.daySummaries !== 'object') data.daySummaries = {};
+    if (!data.archives || typeof data.archives !== 'object') data.archives = {};
+    if (!data.fileArchives || typeof data.fileArchives !== 'object') data.fileArchives = {};
+    if (!data.storage || typeof data.storage !== 'object') data.storage = { version: 1, automatic: true };
     return data;
   }
 
@@ -99,32 +147,85 @@
     };
   }
 
-  function prune(data, today) {
-    var cutoff = new Date(today + 'T00:00:00');
-    cutoff.setDate(cutoff.getDate() - 730);
-    var cutoffStr = dateStr(cutoff);
-    Object.keys(data.days).forEach(function (day) {
-      if (day < cutoffStr) delete data.days[day];
-    });
-    Object.keys(data.completions).forEach(function (day) {
-      if (day < cutoffStr) delete data.completions[day];
-    });
-    Object.keys(data.reasons).forEach(function (key) {
-      var day = key.split('::')[1];
-      if (day && day < cutoffStr) delete data.reasons[key];
-    });
-    Object.keys(data.closures).forEach(function (day) {
-      if (day < cutoffStr) delete data.closures[day];
-    });
-    Object.keys(data.skips).forEach(function (key) {
-      var day = key.split('::')[1];
-      if (day && day < cutoffStr) delete data.skips[key];
-    });
-    Object.keys(data.dropped).forEach(function (key) {
-      var day = key.split('::')[1];
-      if (day && day < cutoffStr) delete data.dropped[key];
-    });
-    data.scheduleHistory = data.scheduleHistory.slice(0, 100);
+  function monthStart(s){var d=parseDay(s);d.setDate(1);return dateStr(d);}
+  function nextMonth(s){var d=parseDay(monthStart(s));d.setMonth(d.getMonth()+1);return dateStr(d);}
+  function monthEnd(s){var d=parseDay(monthStart(s));d.setMonth(d.getMonth()+1);d.setDate(0);return dateStr(d);}
+  function summarizeDayFromData(data,day){
+  var plannedBucket=data.days[day]&&data.days[day].tasks?data.days[day].tasks:{},compBucket=data.completions[day]||{},ids=Object.create(null),cids=Object.create(null),onTime=0,caughtUp=0,open=0,pending=0,missed=0,dropped=0;
+  Object.keys(plannedBucket).forEach(function(id){ids[id]=true;});Object.keys(compBucket).forEach(function(id){ids[id]=true;cids[id]=true;});
+  Object.keys(ids).forEach(function(id){var rec=plannedBucket[id]||compBucket[id]||{},doneRec=compBucket[id]||(rec.isDone?rec:null);if(doneRec){var done=typeof doneRec.doneOn==='number'?logicalDateStr(doneRec.doneOn):null;if(done&&done>day)caughtUp++;else onTime++;return;}if(data.dropped[reasonKey(id,day)]){open++;dropped++;return;}if(data.skips[reasonKey(id,day)]){open++;missed++;return;}if(day>=todayStr())pending++;else open++;});
+  var done=onTime+caughtUp,reasonCounts=Object.create(null),reasonTotal=0;Object.keys(data.reasons).forEach(function(key){var parts=key.split('::'),reasonDay=parts[1];if(reasonDay!==day)return;var item=data.reasons[key];if(item&&item.code){reasonCounts[item.code]=(reasonCounts[item.code]||0)+1;reasonTotal++;}});
+  var out={planned:Object.keys(plannedBucket).length,done:done,onTime:onTime,caughtUp:caughtUp,late:caughtUp,completed:done,doneOnDay:Object.keys(cids).length,extra:Object.keys(cids).filter(function(id){return !plannedBucket[id];}).length,open:open,pending:pending,missed:missed,dropped:dropped,unfinished:open,rate:pct(done,Object.keys(plannedBucket).length),reasonTotal:reasonTotal};if(reasonTotal)out.reasonCounts=reasonCounts;return out;
+  }
+  function captureHistorySummaries(data,today){
+  var changed=false,days=Object.create(null);Object.keys(data.days).forEach(function(d){if(d<today)days[d]=true;});Object.keys(data.completions).forEach(function(d){if(d<today)days[d]=true;});Object.keys(data.reasons).forEach(function(k){var d=k.split('::')[1];if(d&&d<today)days[d]=true;});
+  Object.keys(days).forEach(function(day){if(!data.days[day]&&!data.completions[day])return;var m=summarizeDayFromData(data,day),old=data.daySummaries[day];if(!old||JSON.stringify(old)!==JSON.stringify(m)){data.daySummaries[day]=m;changed=true;}});
+  var cutoff=addDays(today,-SUMMARY_RETENTION_DAYS);Object.keys(data.daySummaries).forEach(function(day){if(day<cutoff){delete data.daySummaries[day];changed=true;}});return changed;
+  }
+  function periodLabel(from,to,type){var a=parseDay(from),b=parseDay(to),base=a.getFullYear()+' 年 '+(a.getMonth()+1)+' 月';if(type==='half')return base+(a.getDate()<15?'上半月':'下半月');return base;}
+  function buildPeriodArchive(data,key,type,from,to){
+  var cursor=from,activeDays=0,planned=0,done=0,onTime=0,caughtUp=0,extra=0,open=0,pending=0,missed=0,dropped=0,reasonCounts=Object.create(null),reasonTotal=0;
+  while(cursor<=to){var m=data.daySummaries[cursor];if(m){if(m.planned||m.doneOnDay||m.reasonTotal)activeDays++;planned+=Number(m.planned||0);done+=Number(m.done||0);onTime+=Number(m.onTime||0);caughtUp+=Number(m.caughtUp||0);extra+=Number(m.extra||0);open+=Number(m.open||0);pending+=Number(m.pending||0);missed+=Number(m.missed||0);dropped+=Number(m.dropped||0);reasonTotal+=Number(m.reasonTotal||0);Object.keys(m.reasonCounts||{}).forEach(function(code){reasonCounts[code]=(reasonCounts[code]||0)+Number(m.reasonCounts[code]||0);});}cursor=addDays(cursor,1);}
+  var out={key:key,type:type,label:periodLabel(from,to,type),from:from,to:to,days:activeDays,planned:planned,done:done,onTime:onTime,caughtUp:caughtUp,extra:extra,open:open,pending:pending,missed:missed,dropped:dropped,reasonTotal:reasonTotal,rate:pct(done,planned),generatedAt:Date.now()};if(reasonTotal)out.reasonCounts=reasonCounts;return out;
+  }
+  function periodHasDetail(data,from,to){return Object.keys(data.days).some(function(d){return d>=from&&d<=to;})||Object.keys(data.completions).some(function(d){return d>=from&&d<=to;});}
+  function ensureArchive(data,key,type,from,to,today){if(to>=today)return false;var old=data.archives[key];if(old&&!periodHasDetail(data,from,to))return false;var next=buildPeriodArchive(data,key,type,from,to);if(old){var a=Object.assign({},old),b=Object.assign({},next);delete a.generatedAt;delete b.generatedAt;if(JSON.stringify(a)===JSON.stringify(b))return false;next.generatedAt=old.generatedAt||Date.now();}if(JSON.stringify(old||{})===JSON.stringify(next))return false;data.archives[key]=next;return true;}
+  function ensureScheduledArchives(data,today){
+  var changed=false,currentMonth=monthStart(today),earliest=Object.keys(data.daySummaries).sort()[0]||currentMonth,cursor=monthStart(earliest);
+  while(cursor<currentMonth){var me=monthEnd(cursor),ym=cursor.slice(0,7),h1=addDays(cursor,14),h2=addDays(cursor,15);changed=ensureArchive(data,ym+'-M','month',cursor,me,today)||changed;changed=ensureArchive(data,ym+'-H1','half',cursor,h1,today)||changed;changed=ensureArchive(data,ym+'-H2','half',h2,me,today)||changed;cursor=nextMonth(cursor);}
+  if(Number(today.slice(8,10))>=15)changed=ensureArchive(data,today.slice(0,7)+'-H1','half',currentMonth,addDays(currentMonth,14),today)||changed;
+  return changed;
+  }
+  function removeDetailDay(data,day){
+  var changed=false;if(data.days[day]){delete data.days[day];changed=true;}if(data.completions[day]){delete data.completions[day];changed=true;}if(data.closures[day]){delete data.closures[day];changed=true;}
+  [data.reasons,data.skips,data.dropped].forEach(function(bucket){Object.keys(bucket).forEach(function(key){if(key.split('::')[1]===day){delete bucket[key];changed=true;}});});return changed;
+  }
+  function shrinkSnapshotNotes(data,maxLen){var changed=false;function trim(bucket){Object.keys(bucket||{}).forEach(function(id){var rec=bucket[id];if(rec&&typeof rec.notes==='string'&&rec.notes.length>maxLen){rec.notes=rec.notes.slice(0,maxLen);changed=true;}});}Object.keys(data.days).forEach(function(d){trim(data.days[d]&&data.days[d].tasks);});Object.keys(data.completions).forEach(function(d){trim(data.completions[d]);});return changed;}
+  function compactForStorage(data,today){
+  data.daySummaries=data.daySummaries&&typeof data.daySummaries==='object'?data.daySummaries:{};data.archives=data.archives&&typeof data.archives==='object'?data.archives:{};data.storage=data.storage&&typeof data.storage==='object'?data.storage:{version:1,automatic:true};
+  var changed=captureHistorySummaries(data,today);changed=ensureScheduledArchives(data,today)||changed;
+  var cutoff=addDays(today,-DETAIL_RETENTION_DAYS),oldDays=Object.create(null);Object.keys(data.days).forEach(function(d){if(d<cutoff)oldDays[d]=true;});Object.keys(data.completions).forEach(function(d){if(d<cutoff)oldDays[d]=true;});Object.keys(data.reasons).forEach(function(k){var d=k.split('::')[1];if(d&&d<cutoff)oldDays[d]=true;});Object.keys(data.skips).forEach(function(k){var d=k.split('::')[1];if(d&&d<cutoff)oldDays[d]=true;});Object.keys(data.dropped).forEach(function(k){var d=k.split('::')[1];if(d&&d<cutoff)oldDays[d]=true;});Object.keys(oldDays).forEach(function(d){changed=removeDetailDay(data,d)||changed;});
+  data.scheduleHistory=data.scheduleHistory.slice(0,50);
+  function pastDetailDays(){var out=Object.create(null),todayValue=todayStr();Object.keys(data.days).forEach(function(d){if(d<todayValue)out[d]=true;});Object.keys(data.completions).forEach(function(d){if(d<todayValue)out[d]=true;});return Object.keys(out).sort();}
+  var past=pastDetailDays(),removed=0;while(byteSize(JSON.stringify(data))>STORAGE_TARGET_BYTES&&past.length){var d=past.shift();if(removeDetailDay(data,d)){changed=true;removed++;}}
+  if(byteSize(JSON.stringify(data))>STORAGE_TARGET_BYTES){changed=shrinkSnapshotNotes(data,600)||changed;}
+  if(byteSize(JSON.stringify(data))>STORAGE_TARGET_BYTES){changed=shrinkSnapshotNotes(data,200)||changed;}
+  if(byteSize(JSON.stringify(data))>STORAGE_TARGET_BYTES){changed=shrinkSnapshotNotes(data,0)||changed;}
+  if(byteSize(JSON.stringify(data))>STORAGE_TARGET_BYTES&&data.taskTypes&&Object.keys(data.taskTypes).length){delete data.taskTypes;changed=true;}
+  if(byteSize(JSON.stringify(data))>STORAGE_TARGET_BYTES){Object.keys(data.imports).slice(0,Math.max(0,Object.keys(data.imports).length-100)).forEach(function(k){delete data.imports[k];changed=true;});}
+  var finalText=JSON.stringify(data),finalBytes=byteSize(finalText);data.storage=Object.assign({},data.storage,{version:1,automatic:true,detailRetentionDays:DETAIL_RETENTION_DAYS,summaryRetentionDays:SUMMARY_RETENTION_DAYS,targetBytes:STORAGE_TARGET_BYTES,limitBytes:STORAGE_LIMIT_BYTES,estimatedBytes:finalBytes});if(changed||removed)data.storage.lastCompactedAt=Date.now();finalText=JSON.stringify(data);data.storage.estimatedBytes=byteSize(finalText);return{changed:changed||removed>0,bytes:data.storage.estimatedBytes,removedDetails:removed,archives:Object.keys(data.archives).length};
+  }
+
+  function halfMonthPeriods(data,today){
+  var dates=Object.keys(data.daySummaries||{}).concat(Object.keys(data.days||{})).filter(function(d){return d<=today;}).sort(),earliest=dates[0]||monthStart(today),limit=addDays(today,-SUMMARY_RETENTION_DAYS);if(earliest<limit)earliest=limit;var cursor=monthStart(earliest),currentMonth=monthStart(today),out=[];
+  while(cursor<=currentMonth){var isCurrent=cursor===currentMonth,me=monthEnd(cursor),h1End=addDays(cursor,14),h2Start=addDays(cursor,15),ym=cursor.slice(0,7);if(!isCurrent||today>=h1End)out.push({id:ym+'-H1',from:cursor,to:h1End,label:periodLabel(cursor,h1End,'half'),final:h1End<today});if(!isCurrent||today>=me)out.push({id:ym+'-H2',from:h2Start,to:me,label:periodLabel(h2Start,me,'half'),final:me<today});cursor=nextMonth(cursor);}return out;
+  }
+  function archiveItemsForDay(data,day){var planned=data.days[day]&&data.days[day].tasks?data.days[day].tasks:{},comp=data.completions[day]||{},ids=Object.create(null),items=[];Object.keys(planned).forEach(function(id){ids[id]=true;});Object.keys(comp).forEach(function(id){ids[id]=true;});Object.keys(ids).forEach(function(id){var rec=planned[id]||comp[id]||{},doneRec=comp[id]||(rec.isDone?rec:null),status='open',extra=!planned[id];if(doneRec){var done=typeof doneRec.doneOn==='number'?logicalDateStr(doneRec.doneOn):null;status=done&&done>day?'late':'done';}else if(data.dropped[reasonKey(id,day)])status='dropped';else if(data.skips[reasonKey(id,day)])status='missed';var reason=data.reasons[reasonKey(id,day)]||{};items.push({id:id,title:rec.title||'(无标题)',status:status,extra:extra,timeEstimate:Number(rec.timeEstimate||0),dueWithTime:typeof rec.dueWithTime==='number'?rec.dueWithTime:null,notes:rec.notes||'',reasonCode:reason.code||'',reasonNote:reason.note||''});});return items;
+  }
+  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.9.4',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
+  async function writeHalfMonthArchive(relativePath,content){
+  if(typeof PluginAPI==='undefined'||typeof PluginAPI.executeNodeScript!=='function')throw new Error('当前版本不支持自动写入应用文件夹，请在设置中启用插件的 Node 文件权限');
+  var script=[
+  "const fs = require('fs');",
+  "const path = require('path');",
+  "try {",
+  "  const appDir = process.resourcesPath ? path.dirname(process.resourcesPath) : path.dirname(process.execPath);",
+  "  const root = path.join(appDir, 'daily-review-archives');",
+  "  const target = path.resolve(root, args[0]);",
+  "  const rel = path.relative(root, target);",
+  "  if (rel.startsWith('..') || path.isAbsolute(rel)) return { success: false, error: 'invalid archive path' };",
+  "  fs.mkdirSync(path.dirname(target), { recursive: true });",
+  "  fs.writeFileSync(target, args[1], 'utf8');",
+  "  return { success: true, path: target, folder: root };",
+  "} catch (error) { return { success: false, error: error.message }; }"
+  ].join('\n');
+  var response=await PluginAPI.executeNodeScript({script:script,args:[relativePath,content],timeout:8000}),result=response&&response.result;if(!response||!response.success||!result||!result.success)throw new Error((result&&result.error)||(response&&response.error)||'归档文件写入失败');return result;
+  }
+  async function exportHalfMonthArchives(data,today){
+  var result={written:0,skipped:0,errors:[]};if(typeof PluginAPI==='undefined'||typeof PluginAPI.executeNodeScript!=='function'){result.errors.push('未启用自动文件写入权限');return result;}
+  data.fileArchives=data.fileArchives&&typeof data.fileArchives==='object'?data.fileArchives:{};var periods=halfMonthPeriods(data,today),detailCutoff=addDays(today,-DETAIL_RETENTION_DAYS);
+  for(var i=0;i<periods.length;i++){var period=periods[i],old=data.fileArchives[period.id];if(old&&old.final&&old.hash&&period.to<detailCutoff){result.skipped++;continue;}try{var payload=buildHalfMonthPayload(data,period,today),stable=Object.assign({},payload);stable.exportedAt='';var hash=hashString(JSON.stringify(stable));if(old&&old.hash===hash&&old.final===payload.period.final){result.skipped++;continue;}var relative=period.from.slice(0,4)+'/'+period.from+'_'+period.to+'.json',written=await writeHalfMonthArchive(relative,JSON.stringify(payload,null,2));data.fileArchives[period.id]={id:period.id,from:period.from,to:period.to,label:period.label,path:written.path,hash:hash,final:payload.period.final,lastExportedAt:Date.now()};data.storage.archiveFolder=written.folder;result.written++;}catch(e){result.errors.push(period.label+'：'+(e&&e.message?e.message:e));}}
+  if(result.errors.length)data.storage.lastArchiveError=result.errors[0];else delete data.storage.lastArchiveError;return result;
   }
 
   async function takeSnapshot() {
@@ -206,7 +307,9 @@
         if (!seen[id] || (day >= today && !stillPlanned && !isClosedDay)) delete data.reasons[key];
       });
 
-      prune(data, today);
+      captureHistorySummaries(data, today);
+      await exportHalfMonthArchives(data, today);
+      compactForStorage(data, today);
       data.lastSnapshotAt = Date.now();
       await saveData(data);
     } catch (e) {
@@ -291,3 +394,6 @@
     });
   }
 })();
+
+
+
