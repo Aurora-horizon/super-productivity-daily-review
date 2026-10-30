@@ -5,7 +5,7 @@
   var KEY = 'daily-review-data-v1';
   var STORAGE_LIMIT_BYTES = 262144;
   var STORAGE_TARGET_BYTES = 220 * 1024;
-  var DETAIL_RETENTION_DAYS = 30;
+  var DETAIL_RETENTION_DAYS = 16;
   var SUMMARY_RETENTION_DAYS = 730;
   var ARCHIVE_SCHEMA = 'super-productivity.daily-review.half-month';
   var snapshotTimer = null;
@@ -202,7 +202,7 @@
   }
   function archiveItemsForDay(data,day){var planned=data.days[day]&&data.days[day].tasks?data.days[day].tasks:{},comp=data.completions[day]||{},ids=Object.create(null),items=[];Object.keys(planned).forEach(function(id){ids[id]=true;});Object.keys(comp).forEach(function(id){ids[id]=true;});Object.keys(ids).forEach(function(id){var rec=planned[id]||comp[id]||{},doneRec=comp[id]||(rec.isDone?rec:null),status='open',extra=!planned[id];if(doneRec){var done=typeof doneRec.doneOn==='number'?logicalDateStr(doneRec.doneOn):null;status=done&&done>day?'late':'done';}else if(data.dropped[reasonKey(id,day)])status='dropped';else if(data.skips[reasonKey(id,day)])status='missed';var reason=data.reasons[reasonKey(id,day)]||{};items.push({id:id,title:rec.title||'(无标题)',status:status,extra:extra,timeEstimate:Number(rec.timeEstimate||0),dueWithTime:typeof rec.dueWithTime==='number'?rec.dueWithTime:null,notes:rec.notes||'',reasonCode:reason.code||'',reasonNote:reason.note||''});});return items;
   }
-  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.9.4',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
+  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.9.5',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
   async function writeHalfMonthArchive(relativePath,content){
   if(typeof PluginAPI==='undefined'||typeof PluginAPI.executeNodeScript!=='function')throw new Error('当前版本不支持自动写入应用文件夹，请在设置中启用插件的 Node 文件权限');
   var script=[
@@ -210,7 +210,7 @@
   "const path = require('path');",
   "try {",
   "  const appDir = process.resourcesPath ? path.dirname(process.resourcesPath) : path.dirname(process.execPath);",
-  "  const root = path.join(appDir, 'daily-review-archives');",
+  "  const root = path.join(appDir, 'daily-review-plugin', 'archives');",
   "  const target = path.resolve(root, args[0]);",
   "  const rel = path.relative(root, target);",
   "  if (rel.startsWith('..') || path.isAbsolute(rel)) return { success: false, error: 'invalid archive path' };",
@@ -394,6 +394,7 @@
     });
   }
 })();
+
 
 
 
