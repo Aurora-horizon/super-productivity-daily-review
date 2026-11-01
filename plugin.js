@@ -8,6 +8,7 @@
   var DETAIL_RETENTION_DAYS = 16;
   var SUMMARY_RETENTION_DAYS = 730;
   var ARCHIVE_SCHEMA = 'super-productivity.daily-review.half-month';
+  var ARCHIVE_ARG_CHUNK_CHARS = 12000;
   var snapshotTimer = null;
   var snapshotRunning = false;
   var snapshotAgain = false;
@@ -202,7 +203,18 @@
   }
   function archiveItemsForDay(data,day){var planned=data.days[day]&&data.days[day].tasks?data.days[day].tasks:{},comp=data.completions[day]||{},ids=Object.create(null),items=[];Object.keys(planned).forEach(function(id){ids[id]=true;});Object.keys(comp).forEach(function(id){ids[id]=true;});Object.keys(ids).forEach(function(id){var rec=planned[id]||comp[id]||{},doneRec=comp[id]||(rec.isDone?rec:null),status='open',extra=!planned[id];if(doneRec){var done=typeof doneRec.doneOn==='number'?logicalDateStr(doneRec.doneOn):null;status=done&&done>day?'late':'done';}else if(data.dropped[reasonKey(id,day)])status='dropped';else if(data.skips[reasonKey(id,day)])status='missed';var reason=data.reasons[reasonKey(id,day)]||{};items.push({id:id,title:rec.title||'(无标题)',status:status,extra:extra,timeEstimate:Number(rec.timeEstimate||0),dueWithTime:typeof rec.dueWithTime==='number'?rec.dueWithTime:null,notes:rec.notes||'',reasonCode:reason.code||'',reasonNote:reason.note||''});});return items;
   }
-  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.9.5',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
+  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.10.0',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
+  function utf8ToBase64(value) {
+    if (typeof TextEncoder !== 'undefined' && typeof btoa === 'function') {
+      var bytes = new TextEncoder().encode(String(value)), binary = '', step = 8192;
+      for (var i = 0; i < bytes.length; i += step) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+      }
+      return btoa(binary);
+    }
+    return btoa(unescape(encodeURIComponent(String(value))));
+  }
+
   async function writeHalfMonthArchive(relativePath,content){
   if(typeof PluginAPI==='undefined'||typeof PluginAPI.executeNodeScript!=='function')throw new Error('当前版本不支持自动写入应用文件夹，请在设置中启用插件的 Node 文件权限');
   var script=[
@@ -212,19 +224,31 @@
   "  const appDir = process.resourcesPath ? path.dirname(process.resourcesPath) : path.dirname(process.execPath);",
   "  const root = path.join(appDir, 'daily-review-plugin', 'archives');",
   "  const target = path.resolve(root, args[0]);",
-  "  const rel = path.relative(root, target);",
-  "  if (rel.startsWith('..') || path.isAbsolute(rel)) return { success: false, error: 'invalid archive path' };",
-  "  fs.mkdirSync(path.dirname(target), { recursive: true });",
-  "  fs.writeFileSync(target, args[1], 'utf8');",
+  "  const tmp = path.resolve(root, args[1]);",
+  "  const targetRel = path.relative(root, target);",
+  "  const tmpRel = path.relative(root, tmp);",
+  "  if (targetRel.startsWith('..') || path.isAbsolute(targetRel) || tmpRel.startsWith('..') || path.isAbsolute(tmpRel)) return { success: false, error: 'invalid archive path' };",
+  "  if (args[2] === 'abort') { try { fs.unlinkSync(tmp); } catch (_) {} return { success: true, path: target, folder: root }; }",
+  "  const chunk = Buffer.from(args[3] || '', 'base64');",
+  "  fs.mkdirSync(path.dirname(tmp), { recursive: true });",
+  "  if (args[2] === 'start') fs.writeFileSync(tmp, chunk);",
+  "  else if (args[2] === 'append') fs.appendFileSync(tmp, chunk);",
+  "  else return { success: false, error: 'invalid archive action' };",
+  "  if (args[4] === '1') { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(tmp, target); fs.unlinkSync(tmp); }",
   "  return { success: true, path: target, folder: root };",
-  "} catch (error) { return { success: false, error: error.message }; }"
+  "} catch (error) { try { fs.unlinkSync(tmp); } catch (_) {} return { success: false, error: error.message }; }"
   ].join('\n');
-  var response=await PluginAPI.executeNodeScript({script:script,args:[relativePath,content],timeout:8000}),result=response&&response.result;if(!response||!response.success||!result||!result.success)throw new Error((result&&result.error)||(response&&response.error)||'归档文件写入失败');return result;
+  var encoded=utf8ToBase64(content),offset=0,tmpRelative=relativePath+'.tmp-'+Date.now()+'-'+Math.random().toString(16).slice(2),result=null,first=true;
+  try{
+  while(offset<encoded.length){var chunk=encoded.slice(offset,offset+ARCHIVE_ARG_CHUNK_CHARS);offset+=chunk.length;var action=first?'start':'append',last=offset>=encoded.length;first=false;var response=await PluginAPI.executeNodeScript({script:script,args:[relativePath,tmpRelative,action,chunk,last?'1':'0'],timeout:8000});result=response&&response.result;if(!response||!response.success||!result||!result.success)throw new Error((result&&result.error)||(response&&response.error)||'归档文件写入失败');}
+  return result;
+  }catch(e){try{await PluginAPI.executeNodeScript({script:script,args:[relativePath,tmpRelative,'abort','','0'],timeout:3000});}catch(_){}throw e;}
   }
-  async function exportHalfMonthArchives(data,today){
+
+  async function exportHalfMonthArchives(data,today,force){
   var result={written:0,skipped:0,errors:[]};if(typeof PluginAPI==='undefined'||typeof PluginAPI.executeNodeScript!=='function'){result.errors.push('未启用自动文件写入权限');return result;}
   data.fileArchives=data.fileArchives&&typeof data.fileArchives==='object'?data.fileArchives:{};var periods=halfMonthPeriods(data,today),detailCutoff=addDays(today,-DETAIL_RETENTION_DAYS);
-  for(var i=0;i<periods.length;i++){var period=periods[i],old=data.fileArchives[period.id];if(old&&old.final&&old.hash&&period.to<detailCutoff){result.skipped++;continue;}try{var payload=buildHalfMonthPayload(data,period,today),stable=Object.assign({},payload);stable.exportedAt='';var hash=hashString(JSON.stringify(stable));if(old&&old.hash===hash&&old.final===payload.period.final){result.skipped++;continue;}var relative=period.from.slice(0,4)+'/'+period.from+'_'+period.to+'.json',written=await writeHalfMonthArchive(relative,JSON.stringify(payload,null,2));data.fileArchives[period.id]={id:period.id,from:period.from,to:period.to,label:period.label,path:written.path,hash:hash,final:payload.period.final,lastExportedAt:Date.now()};data.storage.archiveFolder=written.folder;result.written++;}catch(e){result.errors.push(period.label+'：'+(e&&e.message?e.message:e));}}
+  for(var i=0;i<periods.length;i++){var period=periods[i],old=data.fileArchives[period.id];if(old&&old.final&&old.hash&&!force){result.skipped++;continue;}try{var payload=buildHalfMonthPayload(data,period,today),stable=Object.assign({},payload);stable.exportedAt='';var hash=hashString(JSON.stringify(stable));if(old&&old.hash===hash&&old.final===payload.period.final){result.skipped++;continue;}var relative=period.from.slice(0,4)+'/'+period.from+'_'+period.to+'.json',written=await writeHalfMonthArchive(relative,JSON.stringify(payload,null,2));data.fileArchives[period.id]={id:period.id,from:period.from,to:period.to,label:period.label,path:written.path,hash:hash,final:payload.period.final,lastExportedAt:Date.now()};data.storage.archiveFolder=written.folder;result.written++;}catch(e){result.errors.push(period.label+'：'+(e&&e.message?e.message:e));}}
   if(result.errors.length)data.storage.lastArchiveError=result.errors[0];else delete data.storage.lastArchiveError;return result;
   }
 
@@ -308,7 +332,7 @@
       });
 
       captureHistorySummaries(data, today);
-      await exportHalfMonthArchives(data, today);
+      await exportHalfMonthArchives(data, today, false);
       compactForStorage(data, today);
       data.lastSnapshotAt = Date.now();
       await saveData(data);
@@ -328,7 +352,7 @@
     snapshotTimer = setTimeout(function () {
       snapshotTimer = null;
       takeSnapshot();
-    }, typeof delay === 'number' ? delay : 1800);
+    }, typeof delay === 'number' ? delay : 2600);
   }
 
   try {

@@ -2,9 +2,9 @@
   "name": "每日复盘与计划",
   "id": "daily-review",
   "manifestVersion": 1,
-  "version": "2.9.5",
+  "version": "2.10.0",
   "minSupVersion": "19.1.0",
-  "description": "Linear 风格每日复盘：支持任务系列、未来 7 天自动补齐、每个实例按计划日更新标题日期、历史同名任务类型同步、逾期一次性任务分流、无法完成原因记录、改期撤销和日结，并自动归档与压缩历史数据。",
+  "description": "Linear 风格每日复盘：支持任务系列、未来 7 天自动补齐、每个实例按计划日更新标题日期、历史同名任务类型同步、逾期一次性任务分流、无法完成原因记录、改期撤销和日结，修复大归档写入、勾选卡顿，并支持插件内直接新建任务。",
   "author": "Aurora-horizon",
   "hooks": [
     "taskCreated",
