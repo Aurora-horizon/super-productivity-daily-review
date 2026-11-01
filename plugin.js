@@ -4,7 +4,7 @@
 
   var KEY = 'daily-review-data-v1';
   var STORAGE_LIMIT_BYTES = 262144;
-  var STORAGE_TARGET_BYTES = 220 * 1024;
+  var STORAGE_TARGET_BYTES = 150 * 1024;
   var DETAIL_RETENTION_DAYS = 16;
   var SUMMARY_RETENTION_DAYS = 730;
   var ARCHIVE_SCHEMA = 'super-productivity.daily-review.half-month';
@@ -148,6 +148,57 @@
     };
   }
 
+
+  function daySnapshot(task) {
+    var out = { id: task.id, title: task.title || '(无标题)' };
+    if (task.projectId) out.projectId = task.projectId;
+    if (Number(task.timeEstimate || 0)) out.timeEstimate = Number(task.timeEstimate || 0);
+    if (Number(task.timeSpent || 0)) out.timeSpent = Number(task.timeSpent || 0);
+    if (task.isDone) out.isDone = true;
+    if (typeof task.doneOn === 'number') out.doneOn = task.doneOn;
+    if (typeof task.dueWithTime === 'number') out.dueWithTime = task.dueWithTime;
+    if (task.notes) out.notes = String(task.notes);
+    if (Array.isArray(task.tagIds) && task.tagIds.length) out.tagIds = task.tagIds.slice();
+    if (task.repeatCfgId) out.repeatCfgId = task.repeatCfgId;
+    return out;
+  }
+
+  function completionSnapshot(task) {
+    var out = { id: task.id, title: task.title || '(无标题)' };
+    if (task.projectId) out.projectId = task.projectId;
+    if (Number(task.timeEstimate || 0)) out.timeEstimate = Number(task.timeEstimate || 0);
+    if (task.isDone) out.isDone = true;
+    if (typeof task.doneOn === 'number') out.doneOn = task.doneOn;
+    if (task.dueDay) out.dueDay = task.dueDay;
+    if (typeof task.dueWithTime === 'number') out.dueWithTime = task.dueWithTime;
+    return out;
+  }
+
+  function compactStoredBuckets(data) {
+    var changed = false;
+    function compactBucket(bucket, mapper) {
+      Object.keys(bucket || {}).forEach(function (id) {
+        var current = bucket[id] || {};
+        var next = mapper(current);
+        if (JSON.stringify(current) !== JSON.stringify(next)) {
+          bucket[id] = next;
+          changed = true;
+        }
+      });
+    }
+    Object.keys(data.days || {}).forEach(function (day) {
+      var item = data.days[day];
+      if (!item || !item.tasks) return;
+      compactBucket(item.tasks, daySnapshot);
+      if (!Object.keys(item.tasks).length) { delete data.days[day]; changed = true; }
+    });
+    Object.keys(data.completions || {}).forEach(function (day) {
+      compactBucket(data.completions[day], completionSnapshot);
+      if (!Object.keys(data.completions[day] || {}).length) { delete data.completions[day]; changed = true; }
+    });
+    return changed;
+  }
+
   function monthStart(s){var d=parseDay(s);d.setDate(1);return dateStr(d);}
   function nextMonth(s){var d=parseDay(monthStart(s));d.setMonth(d.getMonth()+1);return dateStr(d);}
   function monthEnd(s){var d=parseDay(monthStart(s));d.setMonth(d.getMonth()+1);d.setDate(0);return dateStr(d);}
@@ -184,7 +235,7 @@
   function shrinkSnapshotNotes(data,maxLen){var changed=false;function trim(bucket){Object.keys(bucket||{}).forEach(function(id){var rec=bucket[id];if(rec&&typeof rec.notes==='string'&&rec.notes.length>maxLen){rec.notes=rec.notes.slice(0,maxLen);changed=true;}});}Object.keys(data.days).forEach(function(d){trim(data.days[d]&&data.days[d].tasks);});Object.keys(data.completions).forEach(function(d){trim(data.completions[d]);});return changed;}
   function compactForStorage(data,today){
   data.daySummaries=data.daySummaries&&typeof data.daySummaries==='object'?data.daySummaries:{};data.archives=data.archives&&typeof data.archives==='object'?data.archives:{};data.storage=data.storage&&typeof data.storage==='object'?data.storage:{version:1,automatic:true};
-  var changed=captureHistorySummaries(data,today);changed=ensureScheduledArchives(data,today)||changed;
+  var changed=captureHistorySummaries(data,today);changed=ensureScheduledArchives(data,today)||changed;changed=compactStoredBuckets(data)||changed;
   var cutoff=addDays(today,-DETAIL_RETENTION_DAYS),oldDays=Object.create(null);Object.keys(data.days).forEach(function(d){if(d<cutoff)oldDays[d]=true;});Object.keys(data.completions).forEach(function(d){if(d<cutoff)oldDays[d]=true;});Object.keys(data.reasons).forEach(function(k){var d=k.split('::')[1];if(d&&d<cutoff)oldDays[d]=true;});Object.keys(data.skips).forEach(function(k){var d=k.split('::')[1];if(d&&d<cutoff)oldDays[d]=true;});Object.keys(data.dropped).forEach(function(k){var d=k.split('::')[1];if(d&&d<cutoff)oldDays[d]=true;});Object.keys(oldDays).forEach(function(d){changed=removeDetailDay(data,d)||changed;});
   data.scheduleHistory=data.scheduleHistory.slice(0,50);
   function pastDetailDays(){var out=Object.create(null),todayValue=todayStr();Object.keys(data.days).forEach(function(d){if(d<todayValue)out[d]=true;});Object.keys(data.completions).forEach(function(d){if(d<todayValue)out[d]=true;});return Object.keys(out).sort();}
@@ -203,7 +254,7 @@
   }
   function archiveItemsForDay(data,day){var planned=data.days[day]&&data.days[day].tasks?data.days[day].tasks:{},comp=data.completions[day]||{},ids=Object.create(null),items=[];Object.keys(planned).forEach(function(id){ids[id]=true;});Object.keys(comp).forEach(function(id){ids[id]=true;});Object.keys(ids).forEach(function(id){var rec=planned[id]||comp[id]||{},doneRec=comp[id]||(rec.isDone?rec:null),status='open',extra=!planned[id];if(doneRec){var done=typeof doneRec.doneOn==='number'?logicalDateStr(doneRec.doneOn):null;status=done&&done>day?'late':'done';}else if(data.dropped[reasonKey(id,day)])status='dropped';else if(data.skips[reasonKey(id,day)])status='missed';var reason=data.reasons[reasonKey(id,day)]||{};items.push({id:id,title:rec.title||'(无标题)',status:status,extra:extra,timeEstimate:Number(rec.timeEstimate||0),dueWithTime:typeof rec.dueWithTime==='number'?rec.dueWithTime:null,notes:rec.notes||'',reasonCode:reason.code||'',reasonNote:reason.note||''});});return items;
   }
-  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.10.0',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
+  function buildHalfMonthPayload(data,period,today){var days=[],cursor=period.from;while(cursor<=period.to){var summary=data.daySummaries[cursor]||summarizeDayFromData(data,cursor);days.push({day:cursor,summary:summary,items:archiveItemsForDay(data,cursor)});cursor=addDays(cursor,1);}var summary=buildPeriodArchive(data,period.id,'half',period.from,period.to);delete summary.key;delete summary.generatedAt;return{schema:ARCHIVE_SCHEMA,version:1,pluginVersion:'2.11.0',period:{id:period.id,from:period.from,to:period.to,label:period.label,final:!!period.final},summary:summary,days:days,exportedAt:new Date().toISOString()};}
   function utf8ToBase64(value) {
     if (typeof TextEncoder !== 'undefined' && typeof btoa === 'function') {
       var bytes = new TextEncoder().encode(String(value)), binary = '', step = 8192;
@@ -305,22 +356,18 @@
         if (day >= today) data.completions[day] = {};
       });
 
-      activeTasks.forEach(function (task) {
-        var item = compactTask(task);
-        var day = plannedDay(task);
-        if (!day) return;
-        if (!data.days[day]) data.days[day] = { tasks: {} };
-        if (!data.days[day].tasks) data.days[day].tasks = {};
-        data.days[day].tasks[task.id] = item;
-      });
-
       tasks.forEach(function (task) {
-        var item = compactTask(task);
-        if (typeof item.doneOn !== 'number') return;
-        var doneDay = logicalDateStr(item.doneOn);
+        var day = plannedDay(task);
+        if (day && day <= today) {
+          if (!data.days[day]) data.days[day] = { tasks: {} };
+          if (!data.days[day].tasks) data.days[day].tasks = {};
+          data.days[day].tasks[task.id] = daySnapshot(task);
+        }
+        if (typeof task.doneOn !== 'number') return;
+        var doneDay = logicalDateStr(task.doneOn);
         if (!doneDay) return;
         if (!data.completions[doneDay]) data.completions[doneDay] = {};
-        data.completions[doneDay][task.id] = item;
+        data.completions[doneDay][task.id] = completionSnapshot(task);
       });
 
       Object.keys(data.reasons).forEach(function (key) {
